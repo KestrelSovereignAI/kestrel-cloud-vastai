@@ -4,8 +4,8 @@ import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 from datetime import datetime, timedelta, timezone
 
-from kestrel_sovereign.features.vastai.manager import VastAIManager
-from kestrel_sovereign.features.vastai.models import (
+from kestrel_cloud_vastai.manager import VastAIManager
+from kestrel_cloud_vastai.models import (
     VastAIManagerError,
     VastAISession,
     InstanceStatus,

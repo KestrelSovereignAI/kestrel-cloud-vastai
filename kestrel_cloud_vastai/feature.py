@@ -10,14 +10,13 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from kestrel_sdk.features.base import Feature, tool
-from kestrel_sovereign.llm.service import BackendType
-from kestrel_sdk.tools.base import ToolCategory
-
-from .manager import VastAIManager
-from .models import (
+from kestrel_cloud_vastai.manager import VastAIManager
+from kestrel_cloud_vastai.models import (
     VastAIManagerError,
     InstanceStatus,
 )
+from kestrel_sdk.llm.types import BackendType
+from kestrel_sdk.tools.base import ToolCategory
 
 logger = logging.getLogger(__name__)
 
