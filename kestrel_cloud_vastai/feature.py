@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 from kestrel_sdk.features.base import Feature, tool
 from kestrel_sdk.tools.result import ToolResult
 from kestrel_cloud_vastai.manager import VastAIManager
-from kestrel_cloud_vastai.models import InstanceStatus
+from kestrel_cloud_vastai.models import InstanceStatus, VastAIManagerError
 from kestrel_sdk.llm.types import BackendType
 from kestrel_sdk.tools.base import ToolCategory
 
@@ -107,7 +107,10 @@ class VastAIFeature(Feature):
 
     async def _status(self) -> ToolResult:
         """Get current session status."""
-        status = await self.manager.get_status()
+        try:
+            status = await self.manager.get_status()
+        except VastAIManagerError as e:
+            return ToolResult.failed(str(e))
         return ToolResult.ok(
             confirmation=f"Vast.ai session status: {status.get('status', 'unknown')}",
             data={
@@ -139,11 +142,14 @@ class VastAIFeature(Feature):
                     data={"available_profiles": available},
                 )
 
-        offers = await self.manager.search_offers(
-            profile=profile,
-            query=query,
-            limit=limit,
-        )
+        try:
+            offers = await self.manager.search_offers(
+                profile=profile,
+                query=query,
+                limit=limit,
+            )
+        except VastAIManagerError as e:
+            return ToolResult.failed(str(e))
 
         # Format offers for display
         formatted = []
@@ -176,16 +182,26 @@ class VastAIFeature(Feature):
         ttl_seconds: str,
     ) -> ToolResult:
         """Start a new GPU instance."""
+        # Validation failures → ToolResult.failed (NOT an exception).
+        # See _search docstring + #1042 layer 4b honesty contract.
+        available = list(self.manager.profiles.keys())
         if not profile_name:
-            # Validation failure → ToolResult.failed (NOT an exception).
-            # See _search docstring + #1042 layer 4b honesty contract.
-            available = list(self.manager.profiles.keys())
             return ToolResult.failed(
                 f"Profile required. Available: {available}",
                 data={
                     "available_profiles": available,
                     "usage": "!vastai on profile=<name>",
                 },
+            )
+        if profile_name not in self.manager.profiles:
+            # Pre-flight check: matches the validation _search does.
+            # Without this guard, manager.start_session(...) raises
+            # VastAIManagerError mid-flight and the audit hook can't
+            # see a structured ToolResult.ERROR for what is, from the
+            # user's perspective, just a typo.
+            return ToolResult.failed(
+                f"Unknown profile '{profile_name}'. Available: {available}",
+                data={"available_profiles": available},
             )
 
         ttl = self._coerce_optional_int(ttl_seconds)
@@ -202,12 +218,15 @@ class VastAIFeature(Feature):
             "env_overrides": env_overrides,
         }
 
-        status = await self.manager.start_session(
-            task_profile=profile_name,
-            model_name=target_model,
-            ttl_seconds=ttl,
-            metadata=metadata,
-        )
+        try:
+            status = await self.manager.start_session(
+                task_profile=profile_name,
+                model_name=target_model,
+                ttl_seconds=ttl,
+                metadata=metadata,
+            )
+        except VastAIManagerError as e:
+            return ToolResult.failed(str(e))
 
         # Attach to LLM router if this is an LLM profile
         if profile_name in {"llm", "ollama"} and status.get("active"):
@@ -233,7 +252,10 @@ class VastAIFeature(Feature):
         no-op path is exactly the #1042 confident-lie failure mode
         (claiming an action happened when it didn't).
         """
-        status = await self.manager.stop_session()
+        try:
+            status = await self.manager.stop_session()
+        except VastAIManagerError as e:
+            return ToolResult.failed(str(e))
         self._detach_gpu_backend("Requested via !vastai off")
         # "offline" status from stop_session = there was no session
         # to stop; anything else (typically "terminated") = we did
@@ -258,7 +280,10 @@ class VastAIFeature(Feature):
 
     async def _list_instances(self) -> ToolResult:
         """List all instances for this account."""
-        instances = await self.manager.show_instances()
+        try:
+            instances = await self.manager.show_instances()
+        except VastAIManagerError as e:
+            return ToolResult.failed(str(e))
 
         formatted = []
         for inst in instances:
@@ -283,7 +308,10 @@ class VastAIFeature(Feature):
 
     async def _get_ssh(self) -> ToolResult:
         """Get SSH connection URL for current session."""
-        ssh_url = await self.manager.get_ssh_url()
+        try:
+            ssh_url = await self.manager.get_ssh_url()
+        except VastAIManagerError as e:
+            return ToolResult.failed(str(e))
         return ToolResult.ok(
             confirmation=(
                 f"SSH ready: ssh {ssh_url}" if ssh_url else "No active session"

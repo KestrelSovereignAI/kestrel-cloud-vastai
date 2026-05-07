@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from kestrel_cloud_vastai.feature import VastAIFeature
+from kestrel_cloud_vastai.models import VastAIManagerError
 from kestrel_sdk.tools.result import ToolResult, ToolResultStatus
 
 
@@ -265,3 +266,67 @@ async def test_stop_with_no_active_session_returns_no_op_confirmation():
         "regression of #1042 honesty fix: confirmation claims an "
         "action happened when there was nothing to stop"
     )
+
+
+# ---------------------------------------------------------------------------
+# Manager-error escape hatches (#1042 codex round-2 catches)
+#
+# Every helper that calls into the underlying VastAIManager wraps
+# the call with a try/except that converts VastAIManagerError into
+# ToolResult.failed. Without that conversion the error surfaces
+# through the SDK DynamicTool wrapper as the legacy
+# ``{success: False, error: ...}`` shape WITHOUT a ``status`` key,
+# which the audit hook can't read.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_start_unknown_profile_returns_failed_pre_flight():
+    """The pre-flight profile-existence check catches unknown
+    profile names before they reach manager.start_session, where a
+    raise would escape the envelope."""
+    feature = _make_feature()
+
+    result = await feature._start(
+        profile_name="not-a-real-profile",
+        model_name="",
+        ttl_seconds="",
+    )
+
+    assert isinstance(result, ToolResult)
+    assert result.status is ToolResultStatus.ERROR
+    assert "not-a-real-profile" in result.error
+    assert "Unknown profile" in result.error
+    assert result.data["available_profiles"] == ["training", "budget", "llm"]
+    feature.manager.start_session.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "method,attr,kwargs",
+    [
+        ("_status", "get_status", {}),
+        ("_search", "search_offers", {"profile_name": None, "limit": 5}),
+        ("_start", "start_session", {
+            "profile_name": "training",
+            "model_name": "",
+            "ttl_seconds": "",
+        }),
+        ("_stop", "stop_session", {}),
+        ("_list_instances", "show_instances", {}),
+        ("_get_ssh", "get_ssh_url", {}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_helper_wraps_manager_error_in_tool_result(method, attr, kwargs):
+    """Every helper that calls into VastAIManager catches
+    VastAIManagerError and converts it to ToolResult.failed. Without
+    this guard, the manager's raise escapes the envelope and the
+    audit hook can't see a structured ToolResult.ERROR."""
+    feature = _make_feature()
+    getattr(feature.manager, attr).side_effect = VastAIManagerError("boom")
+
+    result = await getattr(feature, method)(**kwargs)
+
+    assert isinstance(result, ToolResult)
+    assert result.status is ToolResultStatus.ERROR
+    assert "boom" in result.error
