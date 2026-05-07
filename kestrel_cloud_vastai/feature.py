@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from kestrel_sdk.features.base import Feature, tool
+from kestrel_sdk.tools.result import ToolResult
 from kestrel_cloud_vastai.manager import VastAIManager
 from kestrel_cloud_vastai.models import (
     VastAIManagerError,
@@ -53,7 +54,7 @@ class VastAIFeature(Feature):
         ttl_seconds: str = "",
         query: str = "",
         limit: str = "5",
-    ) -> Dict[str, Any]:
+    ) -> ToolResult:
         """
         Main entry point for Vast.ai instance management.
 
@@ -99,26 +100,32 @@ class VastAIFeature(Feature):
         if action_normalized in {"ssh", "ssh-url"}:
             return await self._get_ssh()
 
-        raise ValueError(
+        return ToolResult.failed(
             f"Unsupported Vast.ai action: {action}. "
-            "Use: status, search, on, off, list, ssh"
+            "Use: status, search, on, off, list, ssh",
+            data={
+                "available_actions": ["status", "search", "on", "off", "list", "ssh"],
+            },
         )
 
-    async def _status(self) -> Dict[str, Any]:
+    async def _status(self) -> ToolResult:
         """Get current session status."""
         status = await self.manager.get_status()
-        return {
-            "action": "status",
-            "session": status,
-            "router": self._router_status(),
-        }
+        return ToolResult.ok(
+            confirmation=f"Vast.ai session status: {status.get('status', 'unknown')}",
+            data={
+                "action": "status",
+                "session": status,
+                "router": self._router_status(),
+            },
+        )
 
     async def _search(
         self,
         profile_name: Optional[str] = None,
         query: Optional[str] = None,
         limit: int = 5,
-    ) -> Dict[str, Any]:
+    ) -> ToolResult:
         """Search for available GPU offers."""
         profile = None
         if profile_name:
@@ -149,19 +156,22 @@ class VastAIFeature(Feature):
                 "location": offer.get("geolocation"),
             })
 
-        return {
-            "action": "search",
-            "query": query or f"profile:{profile_name}",
-            "count": len(formatted),
-            "offers": formatted,
-        }
+        return ToolResult.ok(
+            confirmation=f"Found {len(formatted)} Vast.ai offer(s)",
+            data={
+                "action": "search",
+                "query": query or f"profile:{profile_name}",
+                "count": len(formatted),
+                "offers": formatted,
+            },
+        )
 
     async def _start(
         self,
         profile_name: str,
         model_name: str,
         ttl_seconds: str,
-    ) -> Dict[str, Any]:
+    ) -> ToolResult:
         """Start a new GPU instance."""
         if not profile_name:
             available = list(self.manager.profiles.keys())
@@ -194,23 +204,29 @@ class VastAIFeature(Feature):
         if profile_name in {"llm", "ollama"} and status.get("active"):
             self._attach_gpu_backend(status)
 
-        return {
-            "action": "start",
-            "session": status,
-            "router": self._router_status(),
-        }
+        return ToolResult.ok(
+            confirmation=f"Started Vast.ai session (profile: {profile_name})",
+            data={
+                "action": "start",
+                "session": status,
+                "router": self._router_status(),
+            },
+        )
 
-    async def _stop(self) -> Dict[str, Any]:
+    async def _stop(self) -> ToolResult:
         """Stop and destroy current instance."""
         status = await self.manager.stop_session()
         self._detach_gpu_backend("Requested via !vastai off")
-        return {
-            "action": "stop",
-            "session": status,
-            "router": self._router_status(),
-        }
+        return ToolResult.ok(
+            confirmation="Stopped Vast.ai session",
+            data={
+                "action": "stop",
+                "session": status,
+                "router": self._router_status(),
+            },
+        )
 
-    async def _list_instances(self) -> Dict[str, Any]:
+    async def _list_instances(self) -> ToolResult:
         """List all instances for this account."""
         instances = await self.manager.show_instances()
 
@@ -226,20 +242,28 @@ class VastAIFeature(Feature):
                 "ssh_port": inst.get("ssh_port"),
             })
 
-        return {
-            "action": "list",
-            "count": len(formatted),
-            "instances": formatted,
-        }
+        return ToolResult.ok(
+            confirmation=f"Listed {len(formatted)} Vast.ai instance(s)",
+            data={
+                "action": "list",
+                "count": len(formatted),
+                "instances": formatted,
+            },
+        )
 
-    async def _get_ssh(self) -> Dict[str, Any]:
+    async def _get_ssh(self) -> ToolResult:
         """Get SSH connection URL for current session."""
         ssh_url = await self.manager.get_ssh_url()
-        return {
-            "action": "ssh",
-            "ssh_url": ssh_url,
-            "hint": f"Connect with: ssh {ssh_url}" if ssh_url else "No active session",
-        }
+        return ToolResult.ok(
+            confirmation=(
+                f"SSH ready: ssh {ssh_url}" if ssh_url else "No active session"
+            ),
+            data={
+                "action": "ssh",
+                "ssh_url": ssh_url,
+                "hint": f"Connect with: ssh {ssh_url}" if ssh_url else "No active session",
+            },
+        )
 
     def _attach_gpu_backend(self, session_status: Dict[str, Any]) -> None:
         """Attach Vast.ai instance to LLM router."""
