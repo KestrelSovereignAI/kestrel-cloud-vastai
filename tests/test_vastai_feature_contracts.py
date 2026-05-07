@@ -192,3 +192,76 @@ async def test_get_ssh_no_session_returns_ok_with_none_url():
     assert result.status is ToolResultStatus.OK
     assert "No active session" in result.confirmation
     assert result.data["ssh_url"] is None
+
+
+# ---------------------------------------------------------------------------
+# Validation failure paths (#1042 codex round-1 catches)
+#
+# These tests pin the contract that user-error paths land in the
+# ``ToolResult.failed`` envelope, NOT as raised exceptions. If a
+# helper escapes the contract via ``raise``, the framework's
+# narration audit hook (#1042 layer 3) cannot see the failure to
+# block a confident-lie LLM reply.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_search_unknown_profile_returns_failed_not_raises():
+    """A profile name the manager doesn't know is a user error, not
+    an exception. The new contract requires ToolResult.failed."""
+    feature = _make_feature()
+
+    result = await feature._search(profile_name="not-a-real-profile")
+
+    assert isinstance(result, ToolResult)
+    assert result.status is ToolResultStatus.ERROR
+    assert "not-a-real-profile" in result.error
+    assert "available_profiles" in result.data
+
+
+@pytest.mark.asyncio
+async def test_start_without_profile_returns_failed_not_raises():
+    """Empty profile is a user error, not an exception. The new
+    contract requires ToolResult.failed."""
+    feature = _make_feature()
+
+    result = await feature._start(
+        profile_name="",
+        model_name="",
+        ttl_seconds="",
+    )
+
+    assert isinstance(result, ToolResult)
+    assert result.status is ToolResultStatus.ERROR
+    assert "Profile required" in result.error
+    assert result.data["available_profiles"] == ["training", "budget", "llm"]
+    assert result.data["usage"] == "!vastai on profile=<name>"
+
+
+# ---------------------------------------------------------------------------
+# Honesty: stop on no active session must NOT narrate "Stopped …"
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stop_with_no_active_session_returns_no_op_confirmation():
+    """When ``!vastai off`` runs with no active session, the manager
+    returns ``{"active": False, "status": "offline"}``. Saying
+    "Stopped Vast.ai session" in the confirmation is the #1042
+    confident-lie failure mode (claiming an action happened when it
+    didn't). The confirmation must reflect the no-op."""
+    feature = _make_feature()
+    feature.manager.stop_session.return_value = {
+        "active": False,
+        "status": "offline",
+    }
+
+    result = await feature._stop()
+
+    assert isinstance(result, ToolResult)
+    assert result.status is ToolResultStatus.OK
+    assert "no-op" in result.confirmation.lower()
+    assert "Stopped Vast.ai session" not in result.confirmation, (
+        "regression of #1042 honesty fix: confirmation claims an "
+        "action happened when there was nothing to stop"
+    )

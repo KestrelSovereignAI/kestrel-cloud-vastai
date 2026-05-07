@@ -12,10 +12,7 @@ from typing import Any, Dict, Optional
 from kestrel_sdk.features.base import Feature, tool
 from kestrel_sdk.tools.result import ToolResult
 from kestrel_cloud_vastai.manager import VastAIManager
-from kestrel_cloud_vastai.models import (
-    VastAIManagerError,
-    InstanceStatus,
-)
+from kestrel_cloud_vastai.models import InstanceStatus
 from kestrel_sdk.llm.types import BackendType
 from kestrel_sdk.tools.base import ToolCategory
 
@@ -131,9 +128,15 @@ class VastAIFeature(Feature):
         if profile_name:
             profile = self.manager.profiles.get(profile_name)
             if not profile:
+                # Validation failure → ToolResult.failed (NOT an
+                # exception). With manage_vastai advertised as
+                # returning ToolResult, the public surface contract
+                # requires user-error paths to land in the envelope
+                # so the audit hook (#1042 layer 3) can read them.
                 available = list(self.manager.profiles.keys())
-                raise VastAIManagerError(
-                    f"Unknown profile '{profile_name}'. Available: {available}"
+                return ToolResult.failed(
+                    f"Unknown profile '{profile_name}'. Available: {available}",
+                    data={"available_profiles": available},
                 )
 
         offers = await self.manager.search_offers(
@@ -174,9 +177,15 @@ class VastAIFeature(Feature):
     ) -> ToolResult:
         """Start a new GPU instance."""
         if not profile_name:
+            # Validation failure → ToolResult.failed (NOT an exception).
+            # See _search docstring + #1042 layer 4b honesty contract.
             available = list(self.manager.profiles.keys())
-            raise VastAIManagerError(
-                f"Profile required. Available: {available}"
+            return ToolResult.failed(
+                f"Profile required. Available: {available}",
+                data={
+                    "available_profiles": available,
+                    "usage": "!vastai on profile=<name>",
+                },
             )
 
         ttl = self._coerce_optional_int(ttl_seconds)
@@ -214,11 +223,32 @@ class VastAIFeature(Feature):
         )
 
     async def _stop(self) -> ToolResult:
-        """Stop and destroy current instance."""
+        """Stop and destroy current instance.
+
+        The manager returns ``{"active": False, "status": "offline"}``
+        when there was no session to stop (no-op) and
+        ``{"active": False, "status": "terminated"}`` when an active
+        session was actually stopped. The confirmation must reflect
+        which happened — saying "Stopped Vast.ai session" on the
+        no-op path is exactly the #1042 confident-lie failure mode
+        (claiming an action happened when it didn't).
+        """
         status = await self.manager.stop_session()
         self._detach_gpu_backend("Requested via !vastai off")
+        # "offline" status from stop_session = there was no session
+        # to stop; anything else (typically "terminated") = we did
+        # stop one.
+        was_no_op = (
+            status.get("status") == "offline"
+            and not status.get("active")
+        )
+        confirmation = (
+            "No active Vast.ai session to stop (no-op)"
+            if was_no_op
+            else "Stopped Vast.ai session"
+        )
         return ToolResult.ok(
-            confirmation="Stopped Vast.ai session",
+            confirmation=confirmation,
             data={
                 "action": "stop",
                 "session": status,
