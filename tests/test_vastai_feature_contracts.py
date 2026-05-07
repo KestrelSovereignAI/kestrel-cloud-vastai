@@ -301,6 +301,45 @@ async def test_start_unknown_profile_returns_failed_pre_flight():
     feature.manager.start_session.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_manage_vastai_search_with_invalid_limit_returns_failed():
+    """Non-numeric ``limit`` like ``!vastai search limit=abc`` must
+    land in ToolResult.failed instead of raising ValueError out of
+    ``_coerce_optional_int``. Pre-flight coercion at the dispatch
+    layer so the error is captured before _search is even invoked."""
+    feature = _make_feature()
+
+    result = await feature.manage_vastai(action="search", limit="abc")
+
+    assert isinstance(result, ToolResult)
+    assert result.status is ToolResultStatus.ERROR
+    assert "Invalid limit" in result.error
+    assert result.data["argument"] == "limit"
+    assert result.data["received"] == "abc"
+    feature.manager.search_offers.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_start_with_invalid_ttl_returns_failed():
+    """Non-numeric ``ttl_seconds`` like
+    ``!vastai on profile=training ttl_seconds=abc`` must land in
+    ToolResult.failed instead of raising ValueError mid-method."""
+    feature = _make_feature()
+
+    result = await feature._start(
+        profile_name="training",
+        model_name="",
+        ttl_seconds="abc",
+    )
+
+    assert isinstance(result, ToolResult)
+    assert result.status is ToolResultStatus.ERROR
+    assert "Invalid ttl_seconds" in result.error
+    assert result.data["argument"] == "ttl_seconds"
+    assert result.data["received"] == "abc"
+    feature.manager.start_session.assert_not_awaited()
+
+
 @pytest.mark.parametrize(
     "method,attr,kwargs",
     [

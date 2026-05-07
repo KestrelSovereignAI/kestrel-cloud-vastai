@@ -75,10 +75,20 @@ class VastAIFeature(Feature):
             return await self._status()
 
         if action_normalized in {"search", "offers"}:
+            # Coerce limit BEFORE dispatching so a non-numeric value
+            # like ``limit=abc`` lands in the ToolResult envelope
+            # instead of raising ValueError outside it.
+            try:
+                limit_int = self._coerce_optional_int(limit) or 5
+            except ValueError:
+                return ToolResult.failed(
+                    f"Invalid limit '{limit}'. Expected a non-negative integer.",
+                    data={"argument": "limit", "received": limit},
+                )
             return await self._search(
                 profile_name=profile or None,
                 query=query or None,
-                limit=self._coerce_optional_int(limit) or 5,
+                limit=limit_int,
             )
 
         if action_normalized in {"on", "start"}:
@@ -204,7 +214,13 @@ class VastAIFeature(Feature):
                 data={"available_profiles": available},
             )
 
-        ttl = self._coerce_optional_int(ttl_seconds)
+        try:
+            ttl = self._coerce_optional_int(ttl_seconds)
+        except ValueError:
+            return ToolResult.failed(
+                f"Invalid ttl_seconds '{ttl_seconds}'. Expected a non-negative integer.",
+                data={"argument": "ttl_seconds", "received": ttl_seconds},
+            )
         target_model = model_name or None
 
         env_overrides = {
