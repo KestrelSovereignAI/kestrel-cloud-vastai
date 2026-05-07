@@ -21,6 +21,8 @@ Usage:
     feature = VastAIFeature(agent)
 """
 
+from importlib.metadata import PackageNotFoundError, version as _version
+
 from .feature import VastAIFeature
 from .manager import VastAIManager
 from .models import (
@@ -30,6 +32,11 @@ from .models import (
     VastAISession,
 )
 
+try:
+    __version__ = _version("kestrel-cloud-vastai")
+except PackageNotFoundError:
+    __version__ = "0.0.0+local"
+
 __all__ = [
     "VastAIFeature",
     "VastAIManager",
@@ -37,4 +44,5 @@ __all__ = [
     "VastAISession",
     "InstanceStatus",
     "GPUProfile",
+    "__version__",
 ]
